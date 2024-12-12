@@ -1,20 +1,20 @@
 import pickle
-import warnings
 
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger
 import numpy as np
-from pandas.core.common import SettingWithCopyWarning
 
 from pytorch_forecasting import GroupNormalizer, TemporalFusionTransformer, TimeSeriesDataSet
 from pytorch_forecasting.data.examples import get_stallion_data
 from pytorch_forecasting.metrics import QuantileLoss
 from pytorch_forecasting.models.temporal_fusion_transformer.tuning import optimize_hyperparameters
 
-warnings.simplefilter("error", category=SettingWithCopyWarning)
+
+TRAINER_KWARGS = {"accelerator": "cpu", "limit_train_batches": 30}
 
 
+# load data
 data = get_stallion_data()
 
 data["month"] = data.date.dt.month.astype("str").astype("category")
@@ -90,11 +90,11 @@ validation.save("validation.pkl")
 
 early_stop_callback = EarlyStopping(monitor="val_loss", min_delta=1e-4, patience=10, verbose=False, mode="min")
 lr_logger = LearningRateMonitor()
-logger = TensorBoardLogger(log_graph=True)
+logger = TensorBoardLogger("lightning_logs", log_graph=True)
 
 trainer = pl.Trainer(
-    max_epochs=100,
-    accelerator="auto",
+    max_epochs=1,
+    accelerator="cpu",
     gradient_clip_val=0.1,
     limit_train_batches=30,
     # val_check_interval=20,
@@ -145,23 +145,27 @@ print(f"Number of parameters in network: {tft.size() / 1e3:.1f}k")
 # preds, index = tft.predict(val_dataloader, return_index=True, fast_dev_run=True)
 
 
-# tune
-study = optimize_hyperparameters(
-    train_dataloader,
-    val_dataloader,
-    model_path="optuna_test",
-    n_trials=200,
-    max_epochs=50,
-    gradient_clip_val_range=(0.01, 1.0),
-    hidden_size_range=(8, 128),
-    hidden_continuous_size_range=(8, 128),
-    attention_head_size_range=(1, 4),
-    learning_rate_range=(0.001, 0.1),
-    dropout_range=(0.1, 0.3),
-    trainer_kwargs=dict(limit_train_batches=30),
-    reduce_on_plateau_patience=4,
-    use_learning_rate_finder=False,
-)
+def tune(train_dataloader, val_dataloader):
+    study = optimize_hyperparameters(
+        train_dataloader,
+        val_dataloader,
+        model_path="optuna_test",
+        n_trials=200,
+        max_epochs=50,
+        gradient_clip_val_range=(0.01, 1.0),
+        hidden_size_range=(8, 128),
+        hidden_continuous_size_range=(8, 128),
+        attention_head_size_range=(1, 4),
+        learning_rate_range=(0.001, 0.1),
+        dropout_range=(0.1, 0.3),
+        trainer_kwargs=TRAINER_KWARGS,
+        reduce_on_plateau_patience=4,
+        use_learning_rate_finder=False,
+    )
+    return study
+
+
+study = tune(train_dataloader, val_dataloader)
 with open("test_study.pkl", "wb") as fout:
     pickle.dump(study, fout)
 
